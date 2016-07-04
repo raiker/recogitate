@@ -8,6 +8,8 @@ mod recogitate {
 	
 	impl ReQLExpr for u32 {}
 	
+	//ReQLExprSlice
+	
 	pub struct ReQLExprSlice<'a, T>
 		where T: ReQLExpr+'a
 	{
@@ -29,6 +31,24 @@ mod recogitate {
 	pub fn expr_slice<'a, T: ReQLExpr>(slice_data: &'a [T]) -> ReQLExprSlice<'a, T> {
 		ReQLExprSlice { elems: slice_data }
 	}
+	
+	//ReQLExprStr
+	
+	pub struct ReQLExprStr<'a> {
+		string: &'a str
+	}
+	
+	impl<'a> json::ToJson for ReQLExprStr<'a> {
+		fn to_json(&self) -> json::Json {
+			json::Json::String(String::from(self.string))
+		}
+	}
+	
+	impl<'a> ReQLExpr for ReQLExprStr<'a> {}
+	
+	pub fn expr_str<'a>(string: &'a str) -> ReQLExprStr<'a> {
+		ReQLExprStr { string: string }
+	}
 
 	#[cfg(test)]
 	mod tests {
@@ -45,7 +65,7 @@ mod tests {
 
 	#[test]
     fn it_works() {
-		let json_output = r::expr_slice(&[r::expr_slice(&[1,2]), r::expr_slice(&[1,2])]).to_json();
+		let json_output = r::expr_slice(&[r::expr_str("foo"), r::expr_str("bar")]).to_json();
 		
 		println!("{}", json_output);
 		panic!();
