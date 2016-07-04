@@ -4,11 +4,9 @@ use rustc_serialize::json;
 mod recogitate {
 	use rustc_serialize::json;
 	 
-	pub trait ReQLExpr : json::ToJson {
-	}
+	pub trait ReQLExpr : json::ToJson {}
 	
-	impl ReQLExpr for u32 {
-	}
+	impl ReQLExpr for u32 {}
 	
 	pub struct ReQLExprSlice<'a, T>
 		where T: ReQLExpr+'a
@@ -23,6 +21,10 @@ mod recogitate {
 			json::Json::Array(self.elems.into_iter().map(|x| x.to_json()).collect())
 		}
 	}
+	
+	impl<'a, T> ReQLExpr for ReQLExprSlice<'a, T>
+		where T: ReQLExpr
+	{}
 
 	pub fn expr_slice<'a, T: ReQLExpr>(slice_data: &'a [T]) -> ReQLExprSlice<'a, T> {
 		ReQLExprSlice { elems: slice_data }
@@ -43,7 +45,7 @@ mod tests {
 
 	#[test]
     fn it_works() {
-		let json_output = r::expr_slice(&[1, 2, 3, 4, 5]).to_json();
+		let json_output = r::expr_slice(&[r::expr_slice(&[1,2]), r::expr_slice(&[1,2])]).to_json();
 		
 		println!("{}", json_output);
 		panic!();
