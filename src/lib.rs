@@ -1,53 +1,119 @@
 extern crate rustc_serialize;
 use rustc_serialize::json;
 
-mod recogitate {
+pub mod recogitate {
 	use rustc_serialize::json;
+	use std::ops::Fn;
+	use std::marker::Sized;
 	 
-	pub trait ReQLExpr : json::ToJson {}
+	pub trait Expr : json::ToJson {}
 	
-	impl ReQLExpr for u32 {}
+	impl Expr for json::ToJson {}
 	
-	//ReQLExprSlice
+	//ExprSlice
 	
-	pub struct ReQLExprSlice<'a, T>
-		where T: ReQLExpr+'a
+	/*pub struct ExprSlice<'a, T>
+		where T: Expr+'a
 	{
 		elems: &'a [T]
 	}
 	
-	impl<'a, T> json::ToJson for ReQLExprSlice<'a, T>
-		where T: ReQLExpr
+	impl<'a, T> json::ToJson for ExprSlice<'a, T>
+		where T: Expr
 	{
 		fn to_json(&self) -> json::Json {
 			json::Json::Array(self.elems.into_iter().map(|x| x.to_json()).collect())
 		}
 	}
 	
-	impl<'a, T> ReQLExpr for ReQLExprSlice<'a, T>
-		where T: ReQLExpr
+	impl<'a, T> Expr for ExprSlice<'a, T>
+		where T: Expr
 	{}
 
-	pub fn expr_slice<'a, T: ReQLExpr>(slice_data: &'a [T]) -> ReQLExprSlice<'a, T> {
-		ReQLExprSlice { elems: slice_data }
+	pub fn expr_slice<'a, T: Expr>(slice_data: &'a [T]) -> ExprSlice<'a, T> {
+		ExprSlice { elems: slice_data }
 	}
 	
-	//ReQLExprStr
+	//ExprStr
 	
-	pub struct ReQLExprStr<'a> {
+	pub struct ExprStr<'a> {
 		string: &'a str
 	}
 	
-	impl<'a> json::ToJson for ReQLExprStr<'a> {
+	impl<'a> json::ToJson for ExprStr<'a> {
 		fn to_json(&self) -> json::Json {
 			json::Json::String(String::from(self.string))
 		}
 	}
 	
-	impl<'a> ReQLExpr for ReQLExprStr<'a> {}
+	impl<'a> Expr for ExprStr<'a> {}
 	
-	pub fn expr_str<'a>(string: &'a str) -> ReQLExprStr<'a> {
-		ReQLExprStr { string: string }
+	pub fn expr_str<'a>(string: &'a str) -> ExprStr<'a> {
+		ExprStr { string: string }
+	}*/
+	
+	pub trait ClosureVar {
+	}
+	
+	pub trait Query {
+	}
+	
+	//Selection
+	
+	pub trait Selection {
+		fn filter_fn<P>(self, predicate: P) -> Filter<Self, P>
+			where P: Fn(&ClosureVar) -> bool, Self: Sized
+		{
+			Filter {source: self, predicate: predicate}
+		}
+	}
+	
+	impl Query for Selection {}
+	
+	//Filter
+	pub struct Filter<S, P>
+		where S: Selection, P: Fn(&ClosureVar) -> bool
+	{
+		source: S,
+		predicate: P,
+	}
+	
+	impl<S, P> Selection for Filter<S, P>
+		where S: Selection, P: Fn(&ClosureVar) -> bool
+	{}
+	
+	//DB
+	
+	pub struct DB<'a> {
+		name: &'a str
+	}
+	
+	impl<'a> DB<'a> {
+		pub fn table<'b>(&'b self, name: &'b str) -> Table {
+			Table {name: name, db: Some(&self)}
+		}
+	}
+	
+	pub fn db(db_name: &str) -> DB {
+		DB {name: db_name}
+	}
+	
+	//Table
+	
+	pub struct Table<'a> {
+		name: &'a str,
+		db: Option<&'a DB<'a>>,
+	}
+	
+	impl<'a> Table<'a> {
+		
+	}
+	
+	impl<'a> Selection for Table<'a> {
+	}
+	
+	pub fn table(name: &str) -> Table {
+		Table {name: name, db: None}
 	}
 
 	#[cfg(test)]
@@ -65,9 +131,9 @@ mod tests {
 
 	#[test]
     fn it_works() {
-		let json_output = r::expr_slice(&[r::expr_str("foo"), r::expr_str("bar")]).to_json();
+		//let json_output = r::expr_slice(&[r::expr_str("foo"), r::expr_str("bar")]).to_json();
 		
-		println!("{}", json_output);
+		//println!("{}", json_output);
 		panic!();
     }
 }
