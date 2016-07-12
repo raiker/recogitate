@@ -2,67 +2,159 @@ extern crate rustc_serialize;
 use rustc_serialize::json;
 
 pub mod recogitate {
-	use rustc_serialize::json;
+	use rustc_serialize::json::{self, ToJson};
 	use std::ops::Fn;
 	use std::marker::Sized;
+	use std::result::Result;
+	use std::collections::BTreeMap;
+	
+	pub mod prelude {
+		pub use super::{
+			TreeNode,
+			Selection,
+			Value,
+		};
+	}
+	
+	enum TermTypes {
+		DATUM = 1,
+		VAR = 10,
+		DB = 14,
+		TABLE = 15,
+		EQ = 17,
+		FILTER = 39,
+	}
+	
+	pub struct ReQLGenState {
+		nvars: u64
+	}
+	
+	impl ReQLGenState {
+		pub fn new() -> ReQLGenState {
+			ReQLGenState { nvars: 0 }
+		}
+		
+		fn gen_closure_var(&mut self) -> ClosureVar {
+			let retval = ClosureVar { n: self.nvars };
+			self.nvars += 1;
+			retval
+		}
+	}
 	 
-	pub trait Expr : json::ToJson {}
-	
-	impl Expr for json::ToJson {}
-	
-	//ExprSlice
-	
-	/*pub struct ExprSlice<'a, T>
-		where T: Expr+'a
-	{
-		elems: &'a [T]
+	pub trait TreeNode {
+		fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json;
 	}
 	
-	impl<'a, T> json::ToJson for ExprSlice<'a, T>
-		where T: Expr
-	{
-		fn to_json(&self) -> json::Json {
-			json::Json::Array(self.elems.into_iter().map(|x| x.to_json()).collect())
+	pub trait Value : TreeNode {
+		fn eq<'a, T>(&'a self, other: &'a T) -> Eq<'a, Self, T>
+			where
+				T: 'a+Value,
+				Self: Value,
+				Self: ?Sized,
+		{
+			Eq {a: self, b: other}
 		}
 	}
 	
-	impl<'a, T> Expr for ExprSlice<'a, T>
-		where T: Expr
+	pub struct Eq<'a, T1, T2>
+		where T1: 'a+Value, T2: 'a+Value
+	{
+		a: &'a T1,
+		b: &'a T2,
+	}
+	
+	impl<'a, T1, T2> Value for Eq<'a, T1, T2>
+		where T1: Value, T2: Value
 	{}
-
-	pub fn expr_slice<'a, T: Expr>(slice_data: &'a [T]) -> ExprSlice<'a, T> {
-		ExprSlice { elems: slice_data }
-	}
 	
-	//ExprStr
-	
-	pub struct ExprStr<'a> {
-		string: &'a str
-	}
-	
-	impl<'a> json::ToJson for ExprStr<'a> {
-		fn to_json(&self) -> json::Json {
-			json::Json::String(String::from(self.string))
+	impl<'a, T1, T2> TreeNode for Eq<'a, T1, T2>
+		where T1: Value, T2: Value
+	{
+		fn get_reql_json(&self, mut state: &mut ReQLGenState) -> json::Json {
+			json::Json::Array(vec![
+				(TermTypes::EQ as u32).to_json(),
+				json::Json::Array(vec![
+					self.a.get_reql_json(&mut state),
+					self.b.get_reql_json(&mut state),
+				])
+			])
 		}
 	}
 	
-	impl<'a> Expr for ExprStr<'a> {}
+	//impl TreeNode for json::ToJson {}
 	
-	pub fn expr_str<'a>(string: &'a str) -> ExprStr<'a> {
-		ExprStr { string: string }
+	pub struct Connection {
+	}
+	
+	pub struct ResultSet {
+	}
+	
+	pub enum QueryError {
+	}
+	
+	pub struct ClosureVar {
+		n: u64,
+	}
+	
+	impl TreeNode for ClosureVar {
+		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+			json::Json::Array(vec![
+				(TermTypes::VAR as u32).to_json(),
+				json::Json::Array(vec![self.n.to_json()])
+			])
+		}
+	}
+	
+	impl Value for ClosureVar {}
+	
+	pub trait Query : TreeNode {
+		fn run(self, conn: Connection) -> Result<ResultSet, QueryError>
+			where Self: Sized
+		{
+			let mut state = ReQLGenState::new();
+			println!("{}", self.get_reql_json(&mut state));
+			Ok(ResultSet {})
+		}
+	}
+	
+	//Primitives
+	impl Value for json::ToJson {}
+	
+	impl TreeNode for json::ToJson {
+		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+			self.to_json()
+		}
+	}
+	
+	impl TreeNode for u32 {
+		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+			self.to_json()
+		}
+	}
+
+	/*impl TreeNode for str {
+		fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
+			json::Json::Array(vec![
+				(TermTypes::DATUM as u32).to_json(),
+				self.to_json(),
+				json::Json::Object(BTreeMap::new())
+			])
+		}
 	}*/
 	
-	pub trait ClosureVar {
-	}
+	//Predicates
 	
-	pub trait Query {
+	impl TreeNode for Fn(&ClosureVar) -> bool {
+		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+			"foobar".to_json()
+		}
 	}
 	
 	//Selection
 	
-	pub trait Selection {
+	pub trait Selection : TreeNode {
 		fn filter_fn<P>(self, predicate: P) -> Filter<Self, P>
-			where P: Fn(&ClosureVar) -> bool, Self: Sized
+			where P: Fn(&ClosureVar) -> TreeNode, Self: Sized
 		{
 			Filter {source: self, predicate: predicate}
 		}
@@ -72,15 +164,29 @@ pub mod recogitate {
 	
 	//Filter
 	pub struct Filter<S, P>
-		where S: Selection, P: Fn(&ClosureVar) -> bool
+		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
 	{
 		source: S,
 		predicate: P,
 	}
 	
 	impl<S, P> Selection for Filter<S, P>
-		where S: Selection, P: Fn(&ClosureVar) -> bool
+		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
 	{}
+	
+	impl<S, P> TreeNode for Filter<S, P>
+		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
+	{
+		fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
+			let cv = state.gen_closure_var();
+			
+			json::Json::Array(vec![
+				(TermTypes::FILTER as u32).to_json(),
+				self.source.get_reql_json(state),
+				(self.predicate)(&cv).get_reql_json(state)
+			])
+		}
+	}
 	
 	//DB
 	
@@ -98,6 +204,17 @@ pub mod recogitate {
 		DB {name: db_name}
 	}
 	
+	impl<'a> TreeNode for DB<'a> {
+		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+			json::Json::Array(vec![
+				(TermTypes::DB as u32).to_json(),
+				json::Json::Array(vec![
+					self.name.to_json()
+				])
+			])
+		}
+	}
+	
 	//Table
 	
 	pub struct Table<'a> {
@@ -106,10 +223,31 @@ pub mod recogitate {
 	}
 	
 	impl<'a> Table<'a> {
-		
 	}
 	
 	impl<'a> Selection for Table<'a> {
+	}
+	
+	impl<'a> TreeNode for Table<'a> {
+		fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
+			match self.db {
+				Some(db) =>
+					json::Json::Array(vec![
+						(TermTypes::TABLE as u32).to_json(),
+						json::Json::Array(vec![
+							db.get_reql_json(state),
+							self.name.to_json()
+						])
+					]),
+				None =>
+					json::Json::Array(vec![
+						(TermTypes::TABLE as u32).to_json(),
+						json::Json::Array(vec![
+							self.name.to_json()
+						])
+					])
+			}
+		}
 	}
 	
 	pub fn table(name: &str) -> Table {
@@ -126,14 +264,30 @@ pub mod recogitate {
 
 #[cfg(test)]
 mod tests {
-    use recogitate as r;
 	use rustc_serialize::json::ToJson;
+    use recogitate as r;
+	use recogitate::prelude::*;
 
 	#[test]
     fn it_works() {
-		//let json_output = r::expr_slice(&[r::expr_str("foo"), r::expr_str("bar")]).to_json();
+		let mut state = r::ReQLGenState::new();
 		
-		//println!("{}", json_output);
+		//let a = 10.eq(&15);
+		/*let q = &10u32 as &Selection;
+		let () = q;
+		let a = Value::eq(&10u32, &15u32);
+		let () = a;*/
+		
+		let q = &5u32 /*as &ToJson*/ as &Value;
+		println!("{}", q.get_reql_json(&mut state));
+		//println!("{}", q.to_json());
+		
+		let json_output = r::db("blog").table("users").filter_fn(|x| {
+			//let () = x;
+			x.eq(q)
+		}).get_reql_json(&mut state);
+		
+		println!("{}", json_output);
 		panic!();
     }
 }
