@@ -18,11 +18,13 @@ pub mod recogitate {
 	
 	enum TermTypes {
 		DATUM = 1,
+		MAKE_ARRAY = 2,
 		VAR = 10,
 		DB = 14,
 		TABLE = 15,
 		EQ = 17,
 		FILTER = 39,
+		FUNC = 69,
 	}
 	
 	pub struct ReQLGenState {
@@ -49,8 +51,7 @@ pub mod recogitate {
 		fn eq<'a, T>(&'a self, other: &'a T) -> Eq<'a, Self, T>
 			where
 				T: 'a+Value,
-				Self: Value,
-				Self: ?Sized,
+				Self: Value+Sized,
 		{
 			Eq {a: self, b: other}
 		}
@@ -92,6 +93,7 @@ pub mod recogitate {
 	pub enum QueryError {
 	}
 	
+	#[derive(Copy,Clone)]
 	pub struct ClosureVar {
 		n: u64,
 	}
@@ -118,13 +120,13 @@ pub mod recogitate {
 	}
 	
 	//Primitives
-	impl Value for json::ToJson {}
+	/*impl Value for json::ToJson {}
 	
 	impl TreeNode for json::ToJson {
 		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
 			self.to_json()
 		}
-	}
+	}*/
 	
 	impl TreeNode for u32 {
 		fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
@@ -153,8 +155,11 @@ pub mod recogitate {
 	//Selection
 	
 	pub trait Selection : TreeNode {
-		fn filter_fn<P>(self, predicate: P) -> Filter<Self, P>
-			where P: Fn(&ClosureVar) -> TreeNode, Self: Sized
+		fn filter_fn<P, T>(self, predicate: P) -> Filter<Self, P, T>
+			where 
+				P: Fn(ClosureVar) -> T,
+				T: TreeNode,
+				Self: Sized
 		{
 			Filter {source: self, predicate: predicate}
 		}
@@ -163,27 +168,49 @@ pub mod recogitate {
 	impl Query for Selection {}
 	
 	//Filter
-	pub struct Filter<S, P>
-		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
+	pub struct Filter<S, P, T>
+		where
+			S: Selection,
+			P: Fn(ClosureVar) -> T,
+			T: TreeNode
 	{
 		source: S,
 		predicate: P,
 	}
 	
-	impl<S, P> Selection for Filter<S, P>
-		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
+	impl<S, P, T> Selection for Filter<S, P, T>
+		where
+			S: Selection,
+			P: Fn(ClosureVar) -> T,
+			T: TreeNode
 	{}
 	
-	impl<S, P> TreeNode for Filter<S, P>
-		where S: Selection, P: Fn(&ClosureVar) -> TreeNode
+	impl<S, P, T> TreeNode for Filter<S, P, T>
+		where
+			S: Selection,
+			P: Fn(ClosureVar) -> T,
+			T: TreeNode
 	{
 		fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
 			let cv = state.gen_closure_var();
 			
+			let func_call = json::Json::Array(vec![
+				(TermTypes::FUNC as u32).to_json(),
+				json::Json::Array(vec![
+					json::Json::Array(vec![
+						(TermTypes::MAKE_ARRAY as u32).to_json(),
+						json::Json::Array(vec![
+							cv.n.to_json()
+						])
+					]),
+					(self.predicate)(cv).get_reql_json(state)
+				])
+			]);
+			
 			json::Json::Array(vec![
 				(TermTypes::FILTER as u32).to_json(),
 				self.source.get_reql_json(state),
-				(self.predicate)(&cv).get_reql_json(state)
+				func_call
 			])
 		}
 	}
@@ -278,13 +305,14 @@ mod tests {
 		let a = Value::eq(&10u32, &15u32);
 		let () = a;*/
 		
-		let q = &5u32 /*as &ToJson*/ as &Value;
-		println!("{}", q.get_reql_json(&mut state));
+		//let q = &5u32 /*as &ToJson*/ as &Value;
+		//println!("{}", q.get_reql_json(&mut state));
 		//println!("{}", q.to_json());
 		
 		let json_output = r::db("blog").table("users").filter_fn(|x| {
 			//let () = x;
-			x.eq(q)
+			//x.eq(&x)
+			x
 		}).get_reql_json(&mut state);
 		
 		println!("{}", json_output);
