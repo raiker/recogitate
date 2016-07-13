@@ -5,3 +5,4 @@ authors = ["Joshua Weberruss <joshua.weberruss@gmail.com>"]
 
 [dependencies]
 rustc-serialize = "*"
+openssl = "*"
