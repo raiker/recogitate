@@ -6,13 +6,33 @@ use std::io::BufReader;
 use std::collections::BTreeMap;
 use rustc_serialize::json;
 
-pub mod scram;
+mod scram;
 
 const PROTOCOL_VERSION: u64 = 0;
 
 //connection
 pub struct Connection {
 	br: BufReader<TcpStream>
+}
+
+impl Connection {
+	fn send_packet(&mut self, packet: &json::Json) -> io::Result<()> {
+		try!(write!(self.br.get_mut(),"{}", packet));
+		self.br.get_mut().write_all(&[0x00])
+	}
+	
+	fn recv_packet(&mut self) -> io::Result<json::Json> {
+		let mut buffer = Vec::new();
+		
+		let bytes_read = try!(self.br.read_until(0x00, &mut buffer));
+		
+		if bytes_read == 0 {
+			return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "No data received"));
+		}
+		
+		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)));
+		json::Json::from_str(ret_msg).or(Err(io::Error::new(io::ErrorKind::InvalidData, ret_msg)))
+	}
 }
 
 pub struct ConnectionBuilder {
@@ -81,11 +101,26 @@ impl ConnectionBuilder {
 		let obj_reply = try!(json::Json::from_str(ret_msg).or(Err(io::Error::new(io::ErrorKind::InvalidData, ret_msg))));
 		
 		//reply validation
-		if Self::validate_server_reply(obj_reply) {
-			Ok(Connection {br: br})
-		} else {
-			Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed reply"))
+		if !Self::validate_server_reply(obj_reply) {
+			return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed reply"));
 		}
+		
+		let mut conn = Connection {br: br};
+		
+		//begin authentication handshake
+		let (packet, handshake) = scram::begin_handshake(&self.user, &self.pass);
+		println!("Client sends:");
+		println!("{}", packet);
+		conn.send_packet(&packet);
+		
+		let packet = conn.recv_packet().unwrap();
+		println!("Server sends:");
+		println!("{}", packet);
+		
+		let handshake = handshake.handshake_b(&packet).unwrap();
+		panic!();
+		
+		Ok(conn)
 	}
 }
 
