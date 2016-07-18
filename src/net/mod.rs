@@ -118,7 +118,7 @@ impl ConnectionBuilder {
 		println!("{}", packet);
 		
 		let handshake = handshake.handshake_b(&packet).unwrap();
-		panic!();
+		//panic!();
 		
 		Ok(conn)
 	}

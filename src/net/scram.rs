@@ -187,7 +187,7 @@ mod test {
 		let (msg, handshake_a) = begin_handshake(&user, &pass);
 		
 		println!("{}", msg.pretty());
-		panic!();
+		//panic!();
 	}
 	
 	#[test]
@@ -195,18 +195,20 @@ mod test {
 		let hs_a = HandshakeA {
 			user: String::from("user"),
 			pass: String::from("pencil"),
-			nonce: String::from("fyko+d2lbbFgONRv9qkxdawL"),
-			client_first_message_bare: String::from("n=user,r=fyko+d2lbbFgONRv9qkxdawL")
+			nonce: String::from("rOprNGfwEbeRWgbNEkqO"),
+			client_first_message_bare: String::from("n=user,r=rOprNGfwEbeRWgbNEkqO")
 		};
 		
 		let packet = Json::from_str("{
 			\"success\": true,
-			\"authentication\": \"r=fyko+d2lbbFgONRv9qkxdawL3rfcNHYJY1ZVvWVs7j,s=QSXCR+Q6sek8bf92,i=4096\"
+			\"authentication\": \"r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096\"
 		}").unwrap();
 		
 		let msg = hs_a.handshake_b(&packet).unwrap();
 		
 		println!("{}", msg);
-		panic!();
+		let msg_str = format!("{}", msg);
+		
+		assert_eq!(msg_str, "{\"authentication\":\"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=\"}");
 	}
 }
