@@ -15,7 +15,8 @@ const NONCE_LEN: usize = 16;
 pub enum AuthError {
 	ReqlAuthError(u64, String),
 	ChangedNonce,
-	MalformedData
+	MalformedData,
+	IncorrectServerValidation
 }
 
 pub struct HandshakeA {
@@ -23,6 +24,10 @@ pub struct HandshakeA {
 	pass: String,
 	nonce: String,
 	client_first_message_bare: String,
+}
+
+pub struct HandshakeB {
+	expected_server_signature: Vec<u8>
 }
 
 fn sanitise(user: &String) -> String {
@@ -57,7 +62,7 @@ fn string_xor<'a, T1, T2>(a: T1, b: T2) -> Vec<u8>
 }
 
 impl HandshakeA {
-	pub fn handshake_b(self, msg: &Json) -> Result<Json, AuthError> {
+	pub fn handshake_b(self, msg: &Json) -> Result<(Json, HandshakeB), AuthError> {
 		let auth_str;
 		match msg.find("success") {
 			Some(&Json::Boolean(true)) => {
@@ -150,13 +155,72 @@ impl HandshakeA {
 		let mut msg_obj = BTreeMap::new();
 		msg_obj.insert(String::from("authentication"), Json::String(client_final_message));
 		
-		Ok(Json::Object(msg_obj))
+		let server_key = hmac::hmac(hash::Type::SHA256, &salted_password, "Server Key".as_bytes());
+		let server_signature = hmac::hmac(hash::Type::SHA256, &server_key, auth_message.as_bytes());
+		
+		Ok((Json::Object(msg_obj), HandshakeB {expected_server_signature: server_signature}))
+	}
+}
+
+impl HandshakeB {
+	pub fn handshake_c(self, msg: &Json) -> Result<(), AuthError> {
+		let auth_str;
+		match msg.find("success") {
+			Some(&Json::Boolean(true)) => {
+				match msg.find("authentication") {
+					Some(&Json::String(ref s)) => {
+						auth_str = s.clone()
+					},
+					_ => return Err(AuthError::MalformedData)
+				}
+			},
+			Some(&Json::Boolean(false)) => {
+				match msg.find("error") {
+					Some(&Json::String(ref s)) => {
+						match msg.find("error_code") {
+							Some(&Json::U64(code)) => return Err(AuthError::ReqlAuthError(code, s.clone())),
+							_ => return Err(AuthError::MalformedData),
+						}
+					},
+					_ => return Err(AuthError::MalformedData)
+				}
+			},
+			_ => return Err(AuthError::MalformedData),
+		};
+		
+		//json structure seems valid, check the authentication packet format
+		//"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4="
+		let mapped_fields = auth_str.split(",").filter_map(|s| {
+			match s.find("=") {
+				None => None,
+				Some(x) => {
+					let (s1, s2) = s.split_at(x);
+					Some((Cow::Borrowed(s1), Cow::Borrowed(&s2[1..])))
+				}
+			}
+		}).collect::<BTreeMap<_,_>>();
+		
+		let server_signature = match mapped_fields.get("v") {
+			Some(ref s) => match s.from_base64() {
+				Ok(v) => v,
+				Err(_) => return Err(AuthError::MalformedData)
+			},
+			None => return Err(AuthError::MalformedData)
+		};
+		
+		if openssl::crypto::memcmp::eq(&server_signature, &self.expected_server_signature) {
+			Ok(())
+		} else {
+			Err(AuthError::IncorrectServerValidation)
+		}
 	}
 }
 
 #[cfg(test)]
 mod test {
 	use rustc_serialize::json::Json;
+	use rustc_serialize::base64::FromBase64;
+	use openssl::crypto::memcmp;
 	use super::*;
 	
 	#[test]
@@ -184,11 +248,27 @@ mod test {
 			\"authentication\": \"r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096\"
 		}").unwrap();
 		
-		let msg = hs_a.handshake_b(&packet).unwrap();
+		let (msg, hs_b) = hs_a.handshake_b(&packet).unwrap();
 		
 		println!("{}", msg);
 		let msg_str = format!("{}", msg);
 		
 		assert_eq!(msg_str, "{\"authentication\":\"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=\"}");
+		
+		assert!(memcmp::eq(&hs_b.expected_server_signature, &("6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=".from_base64().unwrap())));
+	}
+	
+	#[test]
+	fn test_handshake_c() {
+		let hs_b = HandshakeB {
+			expected_server_signature: "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=".from_base64().unwrap()
+		};
+		
+		let packet = Json::from_str("{
+			\"success\": true,
+			\"authentication\": \"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=\"
+		}").unwrap();
+		
+		hs_b.handshake_c(&packet).unwrap();
 	}
 }
