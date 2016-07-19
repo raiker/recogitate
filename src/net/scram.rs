@@ -1,9 +1,11 @@
 use openssl;
 use openssl::crypto::hmac;
 use openssl::crypto::hash;
+use openssl::crypto::pkcs5::pbkdf2_hmac_sha256;
 use byteorder::{BigEndian, WriteBytesExt};
-use rustc_serialize::base64::{self,ToBase64};
+use rustc_serialize::base64::{self,ToBase64,FromBase64};
 use rustc_serialize::json::Json;
+use rustc_serialize::hex::{ToHex};
 use std::collections::BTreeMap;
 use std::borrow::Cow;
 
@@ -46,32 +48,6 @@ pub fn begin_handshake(user: &String, pass: &String) -> (Json, HandshakeA) {
 	msg_obj.insert(String::from("authentication"), Json::String(auth_str));
 	
 	(Json::Object(msg_obj), HandshakeA {user: user.clone(), pass: pass.clone(), nonce: nonce, client_first_message_bare: bare_message})
-}
-
-//see https://tools.ietf.org/html/rfc5802#page-7
-fn h_i(s: &[u8], salt: &[u8], n: u64) -> Vec<u8> {
-	assert!(n > 0);
-	
-	let data = {
-		let mut x = Vec::from(s);
-		x.write_u32::<BigEndian>(1).unwrap();
-		x
-	};
-	
-	(0..n).fold(
-		(data, None),
-		|(data, h): (Vec<u8>, Option<Vec<u8>>), _| {
-			let u = hmac::hmac(hash::Type::SHA256, &s, &data);
-			
-			let new_h = match h {
-				//Some(old_h) => old_h.into_iter().zip(u.iter()).map(|(a, &b)| a ^ b).collect::<Vec<_>>(),
-				Some(old_h) => string_xor(&old_h, &u),
-				None => u.clone()
-			};
-			
-			(u, Some(new_h))
-		}
-	).1.unwrap()
 }
 
 fn string_xor<'a, T1, T2>(a: T1, b: T2) -> Vec<u8>
@@ -132,7 +108,10 @@ impl HandshakeA {
 		};
 		
 		let salt = match mapped_fields.get("s") {
-			Some(ref s) => s.clone(),
+			Some(ref s) => match s.from_base64() {
+				Ok(v) => v,
+				Err(_) => return Err(AuthError::MalformedData)
+			},
 			None => return Err(AuthError::MalformedData)
 		};
 		
@@ -145,12 +124,13 @@ impl HandshakeA {
 		};
 		
 		println!("nonce={}", new_nonce);
-		println!("salt={}", salt);
+		println!("salt={}", salt.to_hex());
 		println!("iterations={}", iterations);
 		
 		let client_final_message_without_proof = format!("c=biws,r={}", new_nonce); //biws is base64("n,,")
 		
-		let salted_password = h_i(self.pass.as_bytes(), salt.as_bytes(), iterations);
+		let salted_password = pbkdf2_hmac_sha256(&self.pass, &salt, iterations as usize, 32);
+		println!("{}", salted_password.len());
 		let client_key = hmac::hmac(hash::Type::SHA256, &salted_password, "Client Key".as_bytes());
 		let stored_key = hash::hash(hash::Type::SHA256, &client_key);
 		let auth_message = format!("{},{},{}",

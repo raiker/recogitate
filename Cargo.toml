@@ -5,5 +5,8 @@ authors = ["Joshua Weberruss <joshua.weberruss@gmail.com>"]
 
 [dependencies]
 rustc-serialize = "*"
-openssl = "*"
 byteorder = "*"
+
+[dependencies.openssl]
+version = "*"
+features = ["pkcs5_pbkdf2_hmac"]
