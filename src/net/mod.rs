@@ -118,22 +118,22 @@ impl ConnectionBuilder {
 		
 		//begin authentication handshake
 		let (packet, hs_a) = scram::begin_handshake(&self.user, &self.pass);
-		println!("Client sends:");
-		println!("{}", packet);
+		//println!("Client sends:");
+		//println!("{}", packet);
 		try!(conn.send_packet(&packet));
 		
 		let packet = try!(conn.recv_packet());
-		println!("Server sends:");
-		println!("{}", packet);
+		//println!("Server sends:");
+		//println!("{}", packet);
 		
 		let (packet, hs_b) = try!(hs_a.handshake_b(&packet));
-		println!("Client sends:");
-		println!("{}", packet);
+		//println!("Client sends:");
+		//println!("{}", packet);
 		try!(conn.send_packet(&packet));
 		
 		let packet = try!(conn.recv_packet());
-		println!("Server sends:");
-		println!("{}", packet);
+		//println!("Server sends:");
+		//println!("{}", packet);
 		
 		try!(hs_b.handshake_c(&packet));
 		Ok(conn)
