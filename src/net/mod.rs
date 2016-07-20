@@ -21,17 +21,17 @@ impl Connection {
 		self.br.get_mut().write_all(&[0x00])
 	}
 	
-	fn recv_packet(&mut self) -> io::Result<json::Json> {
+	fn recv_packet(&mut self) -> Result<json::Json, ConnectionError> {
 		let mut buffer = Vec::new();
 		
 		let bytes_read = try!(self.br.read_until(0x00, &mut buffer));
 		
 		if bytes_read == 0 {
-			return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "No data received"));
+			return Err(ConnectionError::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "No data received")));
 		}
 		
-		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)));
-		json::Json::from_str(ret_msg).or(Err(io::Error::new(io::ErrorKind::InvalidData, ret_msg)))
+		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|_| scram::AuthError::InvalidUtf8));
+		json::Json::from_str(ret_msg).map_err(|_| ConnectionError::Auth(scram::AuthError::InvalidJson(ret_msg.to_owned())))
 	}
 }
 
@@ -42,6 +42,24 @@ pub struct ConnectionBuilder {
 	user: String,
 	pass: String,
 	timeout: u32,
+}
+
+#[derive(Debug)]
+pub enum ConnectionError {
+	Io(io::Error),
+	Auth(scram::AuthError),
+}
+
+impl From<io::Error> for ConnectionError {
+	fn from(err: io::Error) -> ConnectionError {
+		ConnectionError::Io(err)
+	}
+}
+
+impl From<scram::AuthError> for ConnectionError {
+	fn from(err: scram::AuthError) -> ConnectionError {
+		ConnectionError::Auth(err)
+	}
 }
 
 impl ConnectionBuilder {
@@ -71,7 +89,7 @@ impl ConnectionBuilder {
 		self
 	}
 	
-	fn validate_server_reply(obj: json::Json) -> bool {
+	fn validate_server_reply(obj: &json::Json) -> bool {
 		match obj.find("success") {
 			Some(&json::Json::Boolean(true)) => (),
 			_ => return false
@@ -82,44 +100,42 @@ impl ConnectionBuilder {
 		};
 	}
 	
-	pub fn connect(self) -> io::Result<Connection> {
+	pub fn connect(self) -> Result<Connection, ConnectionError> {
 		let mut stream = try!(TcpStream::connect((self.hostname.as_str(), self.port)));
 		//try!(stream.set_nonblocking(true));
 		try!(stream.set_nodelay(true));
 		try!(stream.write_all(&[0xc3, 0xbd, 0xc2, 0x34]));
 		
 		let mut br = BufReader::new(stream);
-		let mut buffer = Vec::new();
-		
-		let bytes_read = try!(br.read_until(0x00, &mut buffer));
-		
-		if bytes_read == 0 {
-			return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "No data received"));
-		}
-		
-		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)));
-		let obj_reply = try!(json::Json::from_str(ret_msg).or(Err(io::Error::new(io::ErrorKind::InvalidData, ret_msg))));
-		
-		//reply validation
-		if !Self::validate_server_reply(obj_reply) {
-			return Err(io::Error::new(io::ErrorKind::InvalidData, "Malformed reply"));
-		}
-		
 		let mut conn = Connection {br: br};
 		
+		let obj_reply = try!(conn.recv_packet());
+		
+		//reply validation
+		if !Self::validate_server_reply(&obj_reply) {
+			return Err(ConnectionError::Auth(scram::AuthError::MalformedPacket(obj_reply)));
+		}
+		
 		//begin authentication handshake
-		let (packet, handshake) = scram::begin_handshake(&self.user, &self.pass);
+		let (packet, hs_a) = scram::begin_handshake(&self.user, &self.pass);
 		println!("Client sends:");
 		println!("{}", packet);
-		conn.send_packet(&packet);
+		try!(conn.send_packet(&packet));
 		
-		let packet = conn.recv_packet().unwrap();
+		let packet = try!(conn.recv_packet());
 		println!("Server sends:");
 		println!("{}", packet);
 		
-		let handshake = handshake.handshake_b(&packet).unwrap();
-		//panic!();
+		let (packet, hs_b) = try!(hs_a.handshake_b(&packet));
+		println!("Client sends:");
+		println!("{}", packet);
+		try!(conn.send_packet(&packet));
 		
+		let packet = try!(conn.recv_packet());
+		println!("Server sends:");
+		println!("{}", packet);
+		
+		try!(hs_b.handshake_c(&packet));
 		Ok(conn)
 	}
 }

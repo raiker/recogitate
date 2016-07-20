@@ -8,17 +8,41 @@ use rustc_serialize::json::Json;
 use rustc_serialize::hex::{ToHex};
 use std::collections::BTreeMap;
 use std::borrow::Cow;
+use std::fmt;
+use std::error::{self, Error};
 
 const NONCE_LEN: usize = 16;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub enum AuthError {
 	ReqlAuthError(u64, String),
 	ChangedNonce,
-	MalformedData,
+	MalformedPacket(Json),
+	InvalidUtf8,
+	InvalidJson(String),
 	IncorrectServerValidation
 }
 
+impl fmt::Display for AuthError {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.description())
+    }
+}
+
+impl error::Error for AuthError {
+	fn description(&self) -> &str {
+		match *self {
+			AuthError::ReqlAuthError(_errcode, ref msg) => &msg,
+			AuthError::ChangedNonce => "The nonce returned by the server does not extend the client nonce",
+			AuthError::MalformedPacket(ref _json) => "A malformed packet was received",
+			AuthError::InvalidUtf8 => "The received packet could not be parsed as UTF-8",
+			AuthError::InvalidJson(ref _s) => "The received packet could not be parsed as JSON",
+			AuthError::IncorrectServerValidation => "The server failed to validate successfully"
+		}
+	}
+}
+
+#[derive(Debug)]
 pub struct HandshakeA {
 	user: String,
 	pass: String,
@@ -26,6 +50,7 @@ pub struct HandshakeA {
 	client_first_message_bare: String,
 }
 
+#[derive(Debug)]
 pub struct HandshakeB {
 	expected_server_signature: Vec<u8>
 }
@@ -70,7 +95,7 @@ impl HandshakeA {
 					Some(&Json::String(ref s)) => {
 						auth_str = s.clone()
 					},
-					_ => return Err(AuthError::MalformedData)
+					_ => return Err(AuthError::MalformedPacket(msg.clone()))
 				}
 			},
 			Some(&Json::Boolean(false)) => {
@@ -78,64 +103,50 @@ impl HandshakeA {
 					Some(&Json::String(ref s)) => {
 						match msg.find("error_code") {
 							Some(&Json::U64(code)) => return Err(AuthError::ReqlAuthError(code, s.clone())),
-							_ => return Err(AuthError::MalformedData),
+							_ => return Err(AuthError::MalformedPacket(msg.clone())),
 						}
 					},
-					_ => return Err(AuthError::MalformedData)
+					_ => return Err(AuthError::MalformedPacket(msg.clone()))
 				}
 			},
-			_ => return Err(AuthError::MalformedData),
+			_ => return Err(AuthError::MalformedPacket(msg.clone())),
 		};
 		
 		//json structure seems valid, check the authentication packet format
 		//"r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"
 		let mapped_fields = auth_str.split(",").filter_map(|s| {
-			match s.find("=") {
-				None => None,
-				Some(x) => {
-					let (s1, s2) = s.split_at(x);
-					Some((Cow::Borrowed(s1), Cow::Borrowed(&s2[1..])))
-				}
-			}
+			s.find("=").map(|x| {
+				let (s1, s2) = s.split_at(x);
+				(Cow::Borrowed(s1), Cow::Borrowed(&s2[1..]))
+			})
 		}).collect::<BTreeMap<_,_>>();
 		
 		//check that new nonce is an extension of old nonce
-		let new_nonce;
-		match mapped_fields.get("r") {
-			Some(ref s) => if !s.starts_with(&self.nonce) {
-				//println!("original nonce: {}", self.nonce);
-				//println!("new nonce: {}", s);
-				return Err(AuthError::ChangedNonce)
-			} else {
-				new_nonce = s.clone()
-			},
-			None => return Err(AuthError::MalformedData)
-		};
+		let new_nonce = try!(mapped_fields.get("r")
+			.ok_or(AuthError::MalformedPacket(msg.clone()))
+			.and_then(|s| 
+				if s.starts_with(&self.nonce) {
+					Ok(s.clone())
+				} else {
+					Err(AuthError::ChangedNonce)
+				}));
 		
-		let salt = match mapped_fields.get("s") {
-			Some(ref s) => match s.from_base64() {
-				Ok(v) => v,
-				Err(_) => return Err(AuthError::MalformedData)
-			},
-			None => return Err(AuthError::MalformedData)
-		};
+		let salt = try!(mapped_fields.get("s")
+			.and_then(|s| s.from_base64().ok())
+			.ok_or(AuthError::MalformedPacket(msg.clone())));
 		
-		let iterations = match mapped_fields.get("i") {
-			Some(ref s) => match u64::from_str_radix(&s, 10) {
-				Ok(x) => x,
-				Err(_) => return Err(AuthError::MalformedData)
-			},
-			None => return Err(AuthError::MalformedData)
-		};
+		let iterations = try!(mapped_fields.get("i")
+			.and_then(|s| s.parse::<u64>().ok())
+			.ok_or(AuthError::MalformedPacket(msg.clone())));
 		
-		println!("nonce={}", new_nonce);
-		println!("salt={}", salt.to_hex());
-		println!("iterations={}", iterations);
+		//println!("nonce={}", new_nonce);
+		//println!("salt={}", salt.to_hex());
+		//println!("iterations={}", iterations);
 		
 		let client_final_message_without_proof = format!("c=biws,r={}", new_nonce); //biws is base64("n,,")
 		
 		let salted_password = pbkdf2_hmac_sha256(&self.pass, &salt, iterations as usize, 32);
-		println!("{}", salted_password.len());
+		//println!("{}", salted_password.len());
 		let client_key = hmac::hmac(hash::Type::SHA256, &salted_password, "Client Key".as_bytes());
 		let stored_key = hash::hash(hash::Type::SHA256, &client_key);
 		let auth_message = format!("{},{},{}",
@@ -171,7 +182,7 @@ impl HandshakeB {
 					Some(&Json::String(ref s)) => {
 						auth_str = s.clone()
 					},
-					_ => return Err(AuthError::MalformedData)
+					_ => return Err(AuthError::MalformedPacket(msg.clone()))
 				}
 			},
 			Some(&Json::Boolean(false)) => {
@@ -179,34 +190,27 @@ impl HandshakeB {
 					Some(&Json::String(ref s)) => {
 						match msg.find("error_code") {
 							Some(&Json::U64(code)) => return Err(AuthError::ReqlAuthError(code, s.clone())),
-							_ => return Err(AuthError::MalformedData),
+							_ => return Err(AuthError::MalformedPacket(msg.clone())),
 						}
 					},
-					_ => return Err(AuthError::MalformedData)
+					_ => return Err(AuthError::MalformedPacket(msg.clone()))
 				}
 			},
-			_ => return Err(AuthError::MalformedData),
+			_ => return Err(AuthError::MalformedPacket(msg.clone())),
 		};
 		
 		//json structure seems valid, check the authentication packet format
 		//"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4="
 		let mapped_fields = auth_str.split(",").filter_map(|s| {
-			match s.find("=") {
-				None => None,
-				Some(x) => {
-					let (s1, s2) = s.split_at(x);
-					Some((Cow::Borrowed(s1), Cow::Borrowed(&s2[1..])))
-				}
-			}
+			s.find("=").map(|x| {
+				let (s1, s2) = s.split_at(x);
+				(Cow::Borrowed(s1), Cow::Borrowed(&s2[1..]))
+			})
 		}).collect::<BTreeMap<_,_>>();
 		
-		let server_signature = match mapped_fields.get("v") {
-			Some(ref s) => match s.from_base64() {
-				Ok(v) => v,
-				Err(_) => return Err(AuthError::MalformedData)
-			},
-			None => return Err(AuthError::MalformedData)
-		};
+		let server_signature = try!(mapped_fields.get("v")
+			.and_then(|s| s.from_base64().ok())
+			.ok_or(AuthError::MalformedPacket(msg.clone())));
 		
 		if openssl::crypto::memcmp::eq(&server_signature, &self.expected_server_signature) {
 			Ok(())
