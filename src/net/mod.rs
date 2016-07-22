@@ -5,6 +5,7 @@ use std::str;
 use std::io::BufReader;
 use std::collections::BTreeMap;
 use rustc_serialize::json;
+use byteorder::{LittleEndian, BigEndian, WriteBytesExt, ReadBytesExt};
 
 mod scram;
 
@@ -12,10 +13,44 @@ const PROTOCOL_VERSION: u64 = 0;
 
 //connection
 pub struct Connection {
-	br: BufReader<TcpStream>
+	br: BufReader<TcpStream>,
+	next_token: u64,
 }
 
 impl Connection {
+	fn get_next_token(&mut self) -> u64 {
+		let t = self.next_token;
+		self.next_token = self.next_token + 1;
+		t
+	}
+	
+	pub fn send_query(&mut self, query: &json::Json) -> io::Result<u64> {
+		let serialised_query = format!("{}", query);
+		let token = self.get_next_token();
+		let length = serialised_query.len() as u32;
+		
+		try!(self.br.get_mut().write_u64::<BigEndian>(token));
+		try!(self.br.get_mut().write_u32::<LittleEndian>(length));
+		try!(self.br.get_mut().write_all(serialised_query.as_bytes()));
+		Ok(token)
+	}
+	
+	pub fn recv_response(&mut self) -> io::Result<json::Json> {
+		let token = try!(self.br.read_u64::<BigEndian>());
+		let length = try!(self.br.read_u32::<LittleEndian>()) as usize;
+		let mut buf = Vec::new();
+		buf.resize(length, 0);
+		try!(self.br.read_exact(buf.as_mut_slice()));
+		let ret_msg = str::from_utf8(&buf).unwrap();
+		Ok(json::Json::from_str(ret_msg).unwrap())
+	}
+}
+
+struct AuthConnection {
+	br: BufReader<TcpStream>
+}
+
+impl AuthConnection {
 	fn send_packet(&mut self, packet: &json::Json) -> io::Result<()> {
 		try!(write!(self.br.get_mut(),"{}", packet));
 		self.br.get_mut().write_all(&[0x00])
@@ -32,6 +67,10 @@ impl Connection {
 		
 		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|_| scram::AuthError::InvalidUtf8));
 		json::Json::from_str(ret_msg).map_err(|_| ConnectionError::Auth(scram::AuthError::InvalidJson(ret_msg.to_owned())))
+	}
+	
+	fn into_connection(self) -> Connection {
+		Connection {br: self.br, next_token: 0}
 	}
 }
 
@@ -107,7 +146,7 @@ impl ConnectionBuilder {
 		try!(stream.write_all(&[0xc3, 0xbd, 0xc2, 0x34]));
 		
 		let mut br = BufReader::new(stream);
-		let mut conn = Connection {br: br};
+		let mut conn = AuthConnection {br: br};
 		
 		let obj_reply = try!(conn.recv_packet());
 		
@@ -136,7 +175,7 @@ impl ConnectionBuilder {
 		//println!("{}", packet);
 		
 		try!(hs_b.handshake_c(&packet));
-		Ok(conn)
+		Ok(conn.into_connection())
 	}
 }
 

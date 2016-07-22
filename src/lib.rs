@@ -14,10 +14,13 @@ pub mod prelude {
 		TreeNode,
 		Selection,
 		Value,
+		Queryable,
 	};
 }
 
 pub mod net;
+
+pub use net::*;
 
 enum TermTypes {
 	DATUM = 1,
@@ -28,6 +31,14 @@ enum TermTypes {
 	EQ = 17,
 	FILTER = 39,
 	FUNC = 69,
+}
+
+enum QueryTypes {
+	START = 1,
+	CONTINUE = 2,
+	STOP = 3,
+	NOREPLY_WAIT = 4,
+	SERVER_INFO = 5,
 }
 
 pub struct ReQLGenState {
@@ -85,11 +96,10 @@ impl<'a, T1, T2> TreeNode for Eq<'a, T1, T2>
 	}
 }
 
-//impl TreeNode for json::ToJson {}
-
 pub struct ResultSet {
 }
 
+#[derive(Debug)]
 pub enum QueryError {
 }
 
@@ -109,30 +119,42 @@ impl TreeNode for ClosureVar {
 
 impl Value for ClosureVar {}
 
-pub trait Query : TreeNode {
-	fn run(self, conn: net::Connection) -> Result<ResultSet, QueryError>
+pub trait Queryable : TreeNode {
+	fn run(self, conn: &mut net::Connection) -> Result<ResultSet, QueryError>
 		where Self: Sized
 	{
 		let mut state = ReQLGenState::new();
-		println!("{}", self.get_reql_json(&mut state));
+		let unwrapped_query = self.get_reql_json(&mut state);
+		println!("{}", unwrapped_query);
+		
+		let wrapped_query = json::Json::Array(vec![
+			(QueryTypes::START as u32).to_json(),
+			unwrapped_query,
+		]);
+		
+		conn.send_query(&wrapped_query).unwrap();
+		let reply = conn.recv_response().unwrap();
+		
+		println!("{}", reply.pretty());
+		
 		Ok(ResultSet {})
 	}
 }
 
 //Primitives
-/*impl Value for json::ToJson {}
+impl<T> Value for T where T: json::ToJson {}
 
-impl TreeNode for json::ToJson {
-	fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
-		self.to_json()
-	}
-}*/
-
-impl TreeNode for u32 {
+impl<T> TreeNode for T where T: json::ToJson {
 	fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
 		self.to_json()
 	}
 }
+
+/*impl TreeNode for u32 {
+	fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
+		self.to_json()
+	}
+}*/
 
 /*impl TreeNode for str {
 	fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
@@ -165,7 +187,7 @@ pub trait Selection : TreeNode {
 	}
 }
 
-impl Query for Selection {}
+impl<T> Queryable for T where T: Selection {}
 
 //Filter
 pub struct Filter<S, P, T>
@@ -283,7 +305,10 @@ pub fn table(name: &str) -> Table {
 
 #[cfg(test)]
 mod tests {
+	use super::prelude::*;
+	
 	#[test]
     fn it_works() {
+		
     }
 }

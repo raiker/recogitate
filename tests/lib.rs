@@ -6,7 +6,16 @@ use recogitate as r;
 use recogitate::prelude::*;
 
 #[test]
-fn integration() {
+fn test_run_query() {
+	let mut conn = r::connection().connect().unwrap();
+	
+	let mut result_cursor = r::db("task_planner").table("tasks").run(&mut conn).unwrap();
+	
+	panic!();
+}
+
+#[test]
+fn test_query_json() {
 	let mut state = r::ReQLGenState::new();
 	
 	//let a = 10.eq(&15);
