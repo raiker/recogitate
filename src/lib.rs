@@ -1,6 +1,7 @@
 extern crate rustc_serialize;
 extern crate openssl;
 extern crate byteorder;
+#[macro_use] extern crate maplit;
 
 use rustc_serialize::json::{self, ToJson};
 use std::ops::Fn;

@@ -71,11 +71,11 @@ pub fn begin_handshake(user: &String, pass: &String) -> (Json, HandshakeA) {
 	let bare_message = format!("n={},r={}", sanitise(&user), nonce);
 	let auth_str = format!("n,,{}", bare_message);
 	
-	let mut msg_obj = BTreeMap::new();
-	
-	msg_obj.insert(String::from("protocol_version"), Json::U64(0));
-	msg_obj.insert(String::from("authentication_method"), Json::String(String::from("SCRAM-SHA-256")));
-	msg_obj.insert(String::from("authentication"), Json::String(auth_str));
+	let msg_obj = btreemap!{
+		"protocol_version".to_owned() => Json::U64(0),
+		"authentication_method".to_owned() => Json::String("SCRAM-SHA-256".to_owned()),
+		"authentication".to_owned() => Json::String(auth_str)
+	};
 	
 	(Json::Object(msg_obj), HandshakeA {user: user.clone(), pass: pass.clone(), nonce: nonce, client_first_message_bare: bare_message})
 }
@@ -163,8 +163,9 @@ impl HandshakeA {
 		});
 		let client_final_message = format!("{},p={}", client_final_message_without_proof, client_proof_b64);
 		
-		let mut msg_obj = BTreeMap::new();
-		msg_obj.insert(String::from("authentication"), Json::String(client_final_message));
+		let msg_obj = btreemap!{
+			"authentication".to_owned() => Json::String(client_final_message)
+		};
 		
 		let server_key = hmac::hmac(hash::Type::SHA256, &salted_password, "Server Key".as_bytes());
 		let server_signature = hmac::hmac(hash::Type::SHA256, &server_key, auth_message.as_bytes());
