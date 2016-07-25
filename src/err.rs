@@ -124,4 +124,14 @@ impl From<AuthError> for ConnectionError {
 	}
 }
 
+impl From<::std::io::Error> for QueryError {
+	fn from(err: ::std::io::Error) -> QueryError {
+		Self::from(ConnectionError::Io(err))
+	}
+}
 
+impl From<ConnectionError> for QueryError {
+	fn from(err: ConnectionError) -> QueryError {
+		QueryError::ConnectionError(err)
+	}
+}

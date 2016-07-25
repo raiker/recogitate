@@ -35,14 +35,15 @@ impl Connection {
 		Ok(token)
 	}
 	
-	pub fn recv_response(&mut self) -> io::Result<json::Json> {
+	pub fn recv_response(&mut self) -> Result<json::Json, ConnectionError> {
 		let token = try!(self.br.read_u64::<BigEndian>());
 		let length = try!(self.br.read_u32::<LittleEndian>()) as usize;
 		let mut buf = Vec::new();
 		buf.resize(length, 0);
 		try!(self.br.read_exact(buf.as_mut_slice()));
-		let ret_msg = str::from_utf8(&buf).unwrap();
-		Ok(json::Json::from_str(ret_msg).unwrap())
+		let ret_msg = try!(str::from_utf8(&buf).map_err(|_| ConnectionError::Data(DataError::InvalidUtf8)));
+		let ret_json = try!(json::Json::from_str(ret_msg).map_err(|_| ConnectionError::Data(DataError::InvalidJson(ret_msg.to_owned()))));
+		Ok(ret_json)
 	}
 }
 

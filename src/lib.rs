@@ -130,8 +130,8 @@ pub trait Queryable : TreeNode {
 			unwrapped_query,
 		]);
 		
-		conn.send_query(&wrapped_query).unwrap();
-		let reply = conn.recv_response().unwrap();
+		try!(conn.send_query(&wrapped_query));
+		let reply = try!(conn.recv_response());
 		
 		println!("{}", reply.pretty());
 		
@@ -147,22 +147,6 @@ impl<T> TreeNode for T where T: json::ToJson {
 		self.to_json()
 	}
 }
-
-/*impl TreeNode for u32 {
-	fn get_reql_json(&self, _state: &mut ReQLGenState) -> json::Json {
-		self.to_json()
-	}
-}*/
-
-/*impl TreeNode for str {
-	fn get_reql_json(&self, state: &mut ReQLGenState) -> json::Json {
-		json::Json::Array(vec![
-			(TermTypes::DATUM as u32).to_json(),
-			self.to_json(),
-			json::Json::Object(BTreeMap::new())
-		])
-	}
-}*/
 
 //Predicates
 
