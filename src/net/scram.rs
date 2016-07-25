@@ -2,45 +2,13 @@ use openssl;
 use openssl::crypto::hmac;
 use openssl::crypto::hash;
 use openssl::crypto::pkcs5::pbkdf2_hmac_sha256;
-use byteorder::{BigEndian, WriteBytesExt};
 use rustc_serialize::base64::{self,ToBase64,FromBase64};
 use rustc_serialize::json::Json;
-use rustc_serialize::hex::{ToHex};
 use std::collections::BTreeMap;
 use std::borrow::Cow;
-use std::fmt;
-use std::error::{self, Error};
+use err::{ConnectionError, AuthError, DataError};
 
 const NONCE_LEN: usize = 16;
-
-#[derive(Debug,Clone)]
-pub enum AuthError {
-	ReqlAuthError(u64, String),
-	ChangedNonce,
-	MalformedPacket(Json),
-	InvalidUtf8,
-	InvalidJson(String),
-	IncorrectServerValidation
-}
-
-impl fmt::Display for AuthError {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.description())
-    }
-}
-
-impl error::Error for AuthError {
-	fn description(&self) -> &str {
-		match *self {
-			AuthError::ReqlAuthError(_errcode, ref msg) => &msg,
-			AuthError::ChangedNonce => "The nonce returned by the server does not extend the client nonce",
-			AuthError::MalformedPacket(ref _json) => "A malformed packet was received",
-			AuthError::InvalidUtf8 => "The received packet could not be parsed as UTF-8",
-			AuthError::InvalidJson(ref _s) => "The received packet could not be parsed as JSON",
-			AuthError::IncorrectServerValidation => "The server failed to validate successfully"
-		}
-	}
-}
 
 #[derive(Debug)]
 pub struct HandshakeA {
@@ -87,7 +55,7 @@ fn string_xor<'a, T1, T2>(a: T1, b: T2) -> Vec<u8>
 }
 
 impl HandshakeA {
-	pub fn handshake_b(self, msg: &Json) -> Result<(Json, HandshakeB), AuthError> {
+	pub fn handshake_b(self, msg: &Json) -> Result<(Json, HandshakeB), ConnectionError> {
 		let auth_str;
 		match msg.find("success") {
 			Some(&Json::Boolean(true)) => {
@@ -95,21 +63,21 @@ impl HandshakeA {
 					Some(&Json::String(ref s)) => {
 						auth_str = s.clone()
 					},
-					_ => return Err(AuthError::MalformedPacket(msg.clone()))
+					_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone())))
 				}
 			},
 			Some(&Json::Boolean(false)) => {
 				match msg.find("error") {
 					Some(&Json::String(ref s)) => {
 						match msg.find("error_code") {
-							Some(&Json::U64(code)) => return Err(AuthError::ReqlAuthError(code, s.clone())),
-							_ => return Err(AuthError::MalformedPacket(msg.clone())),
+							Some(&Json::U64(code)) => return Err(ConnectionError::Auth(AuthError::ReqlAuthError(code, s.clone()))),
+							_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))),
 						}
 					},
-					_ => return Err(AuthError::MalformedPacket(msg.clone()))
+					_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone())))
 				}
 			},
-			_ => return Err(AuthError::MalformedPacket(msg.clone())),
+			_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))),
 		};
 		
 		//json structure seems valid, check the authentication packet format
@@ -123,21 +91,21 @@ impl HandshakeA {
 		
 		//check that new nonce is an extension of old nonce
 		let new_nonce = try!(mapped_fields.get("r")
-			.ok_or(AuthError::MalformedPacket(msg.clone()))
+			.ok_or(ConnectionError::Data(DataError::MalformedPacket(msg.clone())))
 			.and_then(|s| 
 				if s.starts_with(&self.nonce) {
 					Ok(s.clone())
 				} else {
-					Err(AuthError::ChangedNonce)
+					Err(ConnectionError::Auth(AuthError::ChangedNonce))
 				}));
 		
 		let salt = try!(mapped_fields.get("s")
 			.and_then(|s| s.from_base64().ok())
-			.ok_or(AuthError::MalformedPacket(msg.clone())));
+			.ok_or(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))));
 		
 		let iterations = try!(mapped_fields.get("i")
 			.and_then(|s| s.parse::<u64>().ok())
-			.ok_or(AuthError::MalformedPacket(msg.clone())));
+			.ok_or(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))));
 		
 		//println!("nonce={}", new_nonce);
 		//println!("salt={}", salt.to_hex());
@@ -175,7 +143,7 @@ impl HandshakeA {
 }
 
 impl HandshakeB {
-	pub fn handshake_c(self, msg: &Json) -> Result<(), AuthError> {
+	pub fn handshake_c(self, msg: &Json) -> Result<(), ConnectionError> {
 		let auth_str;
 		match msg.find("success") {
 			Some(&Json::Boolean(true)) => {
@@ -183,21 +151,21 @@ impl HandshakeB {
 					Some(&Json::String(ref s)) => {
 						auth_str = s.clone()
 					},
-					_ => return Err(AuthError::MalformedPacket(msg.clone()))
+					_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone())))
 				}
 			},
 			Some(&Json::Boolean(false)) => {
 				match msg.find("error") {
 					Some(&Json::String(ref s)) => {
 						match msg.find("error_code") {
-							Some(&Json::U64(code)) => return Err(AuthError::ReqlAuthError(code, s.clone())),
-							_ => return Err(AuthError::MalformedPacket(msg.clone())),
+							Some(&Json::U64(code)) => return Err(ConnectionError::Auth(AuthError::ReqlAuthError(code, s.clone()))),
+							_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))),
 						}
 					},
-					_ => return Err(AuthError::MalformedPacket(msg.clone()))
+					_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone())))
 				}
 			},
-			_ => return Err(AuthError::MalformedPacket(msg.clone())),
+			_ => return Err(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))),
 		};
 		
 		//json structure seems valid, check the authentication packet format
@@ -211,12 +179,12 @@ impl HandshakeB {
 		
 		let server_signature = try!(mapped_fields.get("v")
 			.and_then(|s| s.from_base64().ok())
-			.ok_or(AuthError::MalformedPacket(msg.clone())));
+			.ok_or(ConnectionError::Data(DataError::MalformedPacket(msg.clone()))));
 		
 		if openssl::crypto::memcmp::eq(&server_signature, &self.expected_server_signature) {
 			Ok(())
 		} else {
-			Err(AuthError::IncorrectServerValidation)
+			Err(ConnectionError::Auth(AuthError::IncorrectServerValidation))
 		}
 	}
 }

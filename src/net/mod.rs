@@ -3,9 +3,9 @@ use std::net::TcpStream;
 use std::io;
 use std::str;
 use std::io::BufReader;
-use std::collections::BTreeMap;
 use rustc_serialize::json;
 use byteorder::{LittleEndian, BigEndian, WriteBytesExt, ReadBytesExt};
+use err::{ConnectionError, DataError};
 
 mod scram;
 
@@ -65,8 +65,8 @@ impl AuthConnection {
 			return Err(ConnectionError::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "No data received")));
 		}
 		
-		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|_| scram::AuthError::InvalidUtf8));
-		json::Json::from_str(ret_msg).map_err(|_| ConnectionError::Auth(scram::AuthError::InvalidJson(ret_msg.to_owned())))
+		let ret_msg = try!(str::from_utf8(&buffer[0..bytes_read-1]).map_err(|_| DataError::InvalidUtf8));
+		json::Json::from_str(ret_msg).map_err(|_| ConnectionError::Data(DataError::InvalidJson(ret_msg.to_owned())))
 	}
 	
 	fn into_connection(self) -> Connection {
@@ -81,24 +81,6 @@ pub struct ConnectionBuilder {
 	user: String,
 	pass: String,
 	timeout: u32,
-}
-
-#[derive(Debug)]
-pub enum ConnectionError {
-	Io(io::Error),
-	Auth(scram::AuthError),
-}
-
-impl From<io::Error> for ConnectionError {
-	fn from(err: io::Error) -> ConnectionError {
-		ConnectionError::Io(err)
-	}
-}
-
-impl From<scram::AuthError> for ConnectionError {
-	fn from(err: scram::AuthError) -> ConnectionError {
-		ConnectionError::Auth(err)
-	}
 }
 
 impl ConnectionBuilder {
@@ -145,14 +127,13 @@ impl ConnectionBuilder {
 		try!(stream.set_nodelay(true));
 		try!(stream.write_all(&[0xc3, 0xbd, 0xc2, 0x34]));
 		
-		let mut br = BufReader::new(stream);
-		let mut conn = AuthConnection {br: br};
+		let mut conn = AuthConnection {br: BufReader::new(stream)};
 		
 		let obj_reply = try!(conn.recv_packet());
 		
 		//reply validation
 		if !Self::validate_server_reply(&obj_reply) {
-			return Err(ConnectionError::Auth(scram::AuthError::MalformedPacket(obj_reply)));
+			return Err(ConnectionError::Data(DataError::MalformedPacket(obj_reply)));
 		}
 		
 		//begin authentication handshake

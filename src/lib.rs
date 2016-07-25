@@ -7,7 +7,7 @@ use rustc_serialize::json::{self, ToJson};
 use std::ops::Fn;
 use std::marker::Sized;
 use std::result::Result;
-use std::collections::BTreeMap;
+use err::QueryError;
 
 pub mod prelude {
 	pub use super::{
@@ -17,11 +17,12 @@ pub mod prelude {
 		Queryable,
 	};
 }
-
 pub mod net;
+pub mod err;
 
 pub use net::*;
 
+#[allow(non_camel_case_types,dead_code)]
 enum TermTypes {
 	DATUM = 1,
 	MAKE_ARRAY = 2,
@@ -33,6 +34,7 @@ enum TermTypes {
 	FUNC = 69,
 }
 
+#[allow(non_camel_case_types,dead_code)]
 enum QueryTypes {
 	START = 1,
 	CONTINUE = 2,
@@ -97,10 +99,6 @@ impl<'a, T1, T2> TreeNode for Eq<'a, T1, T2>
 }
 
 pub struct ResultSet {
-}
-
-#[derive(Debug)]
-pub enum QueryError {
 }
 
 #[derive(Copy,Clone)]

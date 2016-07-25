@@ -11,7 +11,7 @@ fn test_run_query() {
 	
 	let mut result_cursor = r::db("task_planner").table("tasks").run(&mut conn).unwrap();
 	
-	panic!();
+	//panic!();
 }
 
 #[test]
